@@ -93,7 +93,7 @@ namespace DragonPearlLure
             // Make serpent chase the flying pearl part 2 electric boogaloo
             harmony.Patch(
                original: AccessTools.Method(typeof(Serpent), nameof(Serpent.behaviorAtGameTick)),
-               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Serpent_UpdateAnimation_Postfix))
+               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Serpent_behaviorAtGameTick_Postfix))
             );
         }
 
@@ -270,8 +270,7 @@ namespace DragonPearlLure
         }
 
         // Make the serpents chase the pearl lure monster
-        // Make the pearl lure monster not chase the farmer
-        private static void Serpent_UpdateAnimation_Postfix(Serpent __instance)
+        private static void Serpent_UpdateAnimation_Postfix(Serpent __instance, ref int ___wasHitCounter, ref bool ___turningRight, ref float ___targetRotation)
         {
             // Not my monster, leave immediately
             if (!__instance.Name.Contains("Serpent", StringComparison.OrdinalIgnoreCase))
@@ -291,17 +290,8 @@ namespace DragonPearlLure
                 return;
             }
 
-            // Find any pearl lure monsters in the location
-            Bat closestLure = null;
-            foreach (Character charact in __instance.currentLocation.characters) {
-                if (charact is Bat batChar && batChar.Name.Equals(pearlLureMonsterName,StringComparison.OrdinalIgnoreCase))
-                {
-                    Mon.Log("Found a lure monster",LogLevel.Warn);
-                    closestLure = batChar;
-                }
-            }
-
             // Get the closest pearl lure monster, if there isn't one then quit
+            Bat closestLure = getLure(__instance.currentLocation);
             if (closestLure == null)
             {
                 Mon.Log("No lure found", LogLevel.Warn);
@@ -321,28 +311,28 @@ namespace DragonPearlLure
             }
             xSlope /= t;
             ySlope /= t;
-            //if (___wasHitCounter <= 0)
-            //{
-            //    ___targetRotation = (float)Math.Atan2(0f - ySlope, xSlope) - (float)Math.PI / 2f;
-            //    if ((double)(Math.Abs(___targetRotation) - Math.Abs(__instance.rotation)) > Math.PI * 7.0 / 8.0 && Game1.random.NextDouble() < 0.5)
-            //    {
-            //        ___turningRight.Value = true;
-            //    }
-            //    else if ((double)(Math.Abs(___targetRotation) - Math.Abs(__instance.rotation)) < Math.PI / 8.0)
-            //    {
-            //        ___turningRight.Value = false;
-            //    }
-            //    if (___turningRight.Value)
-            //    {
-            //        __instance.rotation -= (float)Math.Sign(___targetRotation - __instance.rotation) * ((float)Math.PI / 64f);
-            //    }
-            //    else
-            //    {
-            //        __instance.rotation += (float)Math.Sign(___targetRotation - __instance.rotation) * ((float)Math.PI / 64f);
-            //    }
-            //    __instance.rotation %= (float)Math.PI * 2f;
-            //    ___wasHitCounter.Value = 5 + Game1.random.Next(-1, 2);
-            //}
+            if (___wasHitCounter <= 0)
+            {
+                ___targetRotation = (float)Math.Atan2(0f - ySlope, xSlope) - (float)Math.PI / 2f;
+                if ((double)(Math.Abs(___targetRotation) - Math.Abs(__instance.rotation)) > Math.PI * 7.0 / 8.0 && Game1.random.NextDouble() < 0.5)
+                {
+                    ___turningRight = true;
+                }
+                else if ((double)(Math.Abs(___targetRotation) - Math.Abs(__instance.rotation)) < Math.PI / 8.0)
+                {
+                    ___turningRight = false;
+                }
+                if (___turningRight)
+                {
+                    __instance.rotation -= (float)Math.Sign(___targetRotation - __instance.rotation) * ((float)Math.PI / 64f);
+                }
+                else
+                {
+                    __instance.rotation += (float)Math.Sign(___targetRotation - __instance.rotation) * ((float)Math.PI / 64f);
+                }
+                __instance.rotation %= (float)Math.PI * 2f;
+                ___wasHitCounter = 5 + Game1.random.Next(-1, 2);
+            }
             float maxAccel = Math.Min(7f, Math.Max(2f, 7f - t / 64f / 2f));
             xSlope = (float)Math.Cos((double)__instance.rotation + Math.PI / 2.0);
             ySlope = 0f - (float)Math.Sin((double)__instance.rotation + Math.PI / 2.0);
@@ -356,6 +346,39 @@ namespace DragonPearlLure
             {
                 __instance.yVelocity -= (0f - ySlope) * maxAccel / 6f;
             }
+        }
+
+        private static void Serpent_behaviorAtGameTick_Postfix(Serpent __instance)
+        {
+
+            // Get the closest pearl lure monster, if there isn't one then quit
+            Bat closestLure = getLure(__instance.currentLocation);
+            if (closestLure == null)
+            {
+                Mon.Log("No lure found", LogLevel.Warn);
+                return;
+            }
+
+            if (Math.Abs(closestLure.GetBoundingBox().Center.Y - __instance.GetBoundingBox().Center.Y) > 192)
+            {
+                if (closestLure.GetBoundingBox().Center.X - __instance.GetBoundingBox().Center.X > 0)
+                {
+                    __instance.SetMovingLeft(b: true);
+                }
+                else
+                {
+                    __instance.SetMovingRight(b: true);
+                }
+            }
+            else if (closestLure.GetBoundingBox().Center.Y - __instance.GetBoundingBox().Center.Y > 0)
+            {
+                __instance.SetMovingUp(b: true);
+            }
+            else
+            {
+                __instance.SetMovingDown(b: true);
+            }
+
         }
 
         // Generate explosion animation when placed
@@ -383,6 +406,19 @@ namespace DragonPearlLure
             multiplayer.broadcastSprites(location, pearlTAS);
             location.netAudio.StartPlaying("fuse");
             return true;
+        }
+
+        private static Bat getLure(GameLocation location)
+        {
+            foreach (Character charact in location.characters)
+            {
+                if (charact is Bat batChar && batChar.Name.Equals(pearlLureMonsterName, StringComparison.OrdinalIgnoreCase))
+                {
+                    Mon.Log("Found a lure monster", LogLevel.Warn);
+                    return batChar;
+                }
+            }
+            return null;
         }
 
         //private static Bat findClosestPearlMonster(Bat[] monsterList, int xLoc, int yLoc)
