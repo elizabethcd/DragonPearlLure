@@ -184,6 +184,7 @@ namespace DragonPearlLure
                 newBat.Name = pearlLureMonsterName;
                 newBat.reloadSprite();
                 newBat.Speed = 2;
+                newBat.objectsToDrop.Clear();
                 __instance.Parent.addCharacter(newBat);
             }
         }
