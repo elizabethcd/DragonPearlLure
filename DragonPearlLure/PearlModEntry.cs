@@ -1,8 +1,10 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Netcode;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewModdingAPI.Utilities;
@@ -29,6 +31,9 @@ namespace DragonPearlLure
         /// <summary>The name of the pearl lure.</summary>
         private static string pearlLureMonsterName = "Pearl Lure Monster";
 
+        /// <summary>The mod unique ID.</summary>
+        private static string modID;
+
         /// <summary>The item ID for the pearl lure.</summary>
         public static int PearlLureID => JA_API.GetObjectId(pearlLureName);
 
@@ -47,6 +52,7 @@ namespace DragonPearlLure
             var Game1_multiplayer = this.Helper.Reflection.GetField<Multiplayer>(typeof(Game1), "multiplayer").GetValue();
             Mon = Monitor;
             multiplayer = Game1_multiplayer;
+            modID = this.ModManifest.UniqueID;
 
             // Allow pearl lures to be placed
             harmony.Patch(
@@ -70,6 +76,24 @@ namespace DragonPearlLure
             harmony.Patch(
                original: AccessTools.Method(typeof(TemporaryAnimatedSprite), nameof(TemporaryAnimatedSprite.unload)),
                postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.TASUnload_Postfix))
+            );
+
+            // Make flying pearl not chase the farmer
+            harmony.Patch(
+               original: AccessTools.Method(typeof(Bat), nameof(Bat.behaviorAtGameTick)),
+               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Bat_BehaviorAtGameTick_Postfix))
+            );
+
+            // Make serpent chase the flying pearl
+            harmony.Patch(
+               original: AccessTools.Method(typeof(Serpent), "updateAnimation"),
+               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Serpent_UpdateAnimation_Postfix))
+            );
+
+            // Make serpent chase the flying pearl part 2 electric boogaloo
+            harmony.Patch(
+               original: AccessTools.Method(typeof(Serpent), nameof(Serpent.behaviorAtGameTick)),
+               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Serpent_UpdateAnimation_Postfix))
             );
         }
 
@@ -155,6 +179,185 @@ namespace DragonPearlLure
             }
         }
 
+        // Make the pearl lure monster not chase the farmer
+        private static void Bat_BehaviorAtGameTick_Postfix(Bat __instance, float ___maxSpeed, float ___extraVelocity, ref NetInt ___wasHitCounter, ref NetBool ___turningRight, ref float ___targetRotation)
+        {
+            // Not my monster, leave immediately
+            if (!__instance.Name.Equals(pearlLureMonsterName,StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // Get the existing target, if there is one
+            int targetX = -1;
+            int targetY = -1;
+            try
+            {
+                if (__instance.modData.ContainsKey(modID + "X"))
+                {
+                    targetX = Int32.Parse(__instance.modData[modID + "X"]);
+                }
+                if (__instance.modData.ContainsKey(modID + "Y"))
+                {
+                    targetY = Int32.Parse(__instance.modData[modID + "Y"]);
+                }
+            }
+            catch (Exception ex)
+            {
+                Mon.Log($"Something very weird happened to the modData, causing {ex}", LogLevel.Error);
+            }
+
+            // Pick a new target location 1% of the time or if there is no current target location
+            if (Game1.random.Next(100) == 0 || targetX < 0 || targetY < 0)
+            {
+                // Get new target location
+                int newTargetX = Game1.random.Next(__instance.currentLocation.Map.DisplaySize.Width);
+                int newTargetY = Game1.random.Next(__instance.currentLocation.Map.DisplaySize.Height);
+                // Save new target to modData
+                __instance.modData[modID + "X"] = newTargetX.ToString();
+                __instance.modData[modID + "Y"] = newTargetY.ToString();
+                targetX = newTargetX;
+                targetY = newTargetY;
+            }
+
+            // Get the x and y slope towards the target and normalize
+            float xSlope = -(targetX - __instance.GetBoundingBox().Center.X);
+            float ySlope = targetY - __instance.GetBoundingBox().Center.Y;
+            float t = Math.Max(1f, Math.Abs(xSlope) + Math.Abs(ySlope));
+            if (t < (float)((___extraVelocity > 0f) ? 192 : 64))
+            {
+                __instance.xVelocity = Math.Max(0f - ___maxSpeed, Math.Min(___maxSpeed, __instance.xVelocity * 1.05f));
+                __instance.yVelocity = Math.Max(0f - ___maxSpeed, Math.Min(___maxSpeed, __instance.yVelocity * 1.05f));
+            }
+            xSlope /= t;
+            ySlope /= t;
+
+            if ((int)___wasHitCounter.Value <= 0)
+            {
+                ___targetRotation = (float)Math.Atan2(0f - ySlope, xSlope) - (float)Math.PI / 2f;
+                if ((double)(Math.Abs(___targetRotation) - Math.Abs(__instance.rotation)) > Math.PI * 7.0 / 8.0 && Game1.random.NextDouble() < 0.5)
+                {
+                    ___turningRight.Value = true;
+                }
+                else if ((double)(Math.Abs(___targetRotation) - Math.Abs(__instance.rotation)) < Math.PI / 8.0)
+                {
+                    ___turningRight.Value = false;
+                }
+                if ((bool)___turningRight.Value)
+                {
+                    __instance.rotation -= (float)Math.Sign(___targetRotation - __instance.rotation) * ((float)Math.PI / 64f);
+                }
+                else
+                {
+                    __instance.rotation += (float)Math.Sign(___targetRotation - __instance.rotation) * ((float)Math.PI / 64f);
+                }
+                __instance.rotation %= (float)Math.PI * 2f;
+                ___wasHitCounter.Value = 0;
+            }
+            float maxAccel = Math.Min(5f, Math.Max(1f, 5f - t / 64f / 2f)) + ___extraVelocity;
+            xSlope = (float)Math.Cos((double)__instance.rotation + Math.PI / 2.0);
+            ySlope = 0f - (float)Math.Sin((double)__instance.rotation + Math.PI / 2.0);
+            __instance.xVelocity += (0f - xSlope) * maxAccel / 6f + (float)Game1.random.Next(-10, 10) / 100f;
+            __instance.yVelocity += (0f - ySlope) * maxAccel / 6f + (float)Game1.random.Next(-10, 10) / 100f;
+            if (Math.Abs(__instance.xVelocity) > Math.Abs((0f - xSlope) * ___maxSpeed))
+            {
+                __instance.xVelocity -= (0f - xSlope) * maxAccel / 6f;
+            }
+            if (Math.Abs(__instance.yVelocity) > Math.Abs((0f - ySlope) * ___maxSpeed))
+            {
+                __instance.yVelocity -= (0f - ySlope) * maxAccel / 6f;
+            }
+        }
+
+        // Make the serpents chase the pearl lure monster
+        // Make the pearl lure monster not chase the farmer
+        private static void Serpent_UpdateAnimation_Postfix(Serpent __instance)
+        {
+            // Not my monster, leave immediately
+            if (!__instance.Name.Contains("Serpent", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // If the serpent is in a weird place, quit and leave
+            if (double.IsNaN(__instance.xVelocity) || double.IsNaN(__instance.yVelocity))
+            {
+                Mon.Log("Bad serpent return", LogLevel.Warn);
+                return;
+            }
+            if (__instance.Position.X <= -640f || __instance.Position.Y <= -640f || __instance.Position.X >= (float)(__instance.currentLocation.Map.Layers[0].LayerWidth * 64 + 640) || __instance.Position.Y >= (float)(__instance.currentLocation.Map.Layers[0].LayerHeight * 64 + 640))
+            {
+                Mon.Log("Bad serpent return", LogLevel.Warn);
+                return;
+            }
+
+            // Find any pearl lure monsters in the location
+            Bat closestLure = null;
+            foreach (Character charact in __instance.currentLocation.characters) {
+                if (charact is Bat batChar && batChar.Name.Equals(pearlLureMonsterName,StringComparison.OrdinalIgnoreCase))
+                {
+                    Mon.Log("Found a lure monster",LogLevel.Warn);
+                    closestLure = batChar;
+                }
+            }
+
+            // Get the closest pearl lure monster, if there isn't one then quit
+            if (closestLure == null)
+            {
+                Mon.Log("No lure found", LogLevel.Warn);
+                return;
+            }
+
+            Mon.Log("Redirecting serpent to lure",LogLevel.Warn);
+
+            // Get the x and y slope towards the target and normalize
+            float xSlope = -(closestLure.GetBoundingBox().Center.X - __instance.GetBoundingBox().Center.X);
+            float ySlope = closestLure.GetBoundingBox().Center.Y - __instance.GetBoundingBox().Center.Y;
+            float t = Math.Max(1f, Math.Abs(xSlope) + Math.Abs(ySlope));
+            if (t < 64f)
+            {
+                __instance.xVelocity = Math.Max(-7f, Math.Min(7f, __instance.xVelocity * 1.1f));
+                __instance.yVelocity = Math.Max(-7f, Math.Min(7f, __instance.yVelocity * 1.1f));
+            }
+            xSlope /= t;
+            ySlope /= t;
+            //if (___wasHitCounter <= 0)
+            //{
+            //    ___targetRotation = (float)Math.Atan2(0f - ySlope, xSlope) - (float)Math.PI / 2f;
+            //    if ((double)(Math.Abs(___targetRotation) - Math.Abs(__instance.rotation)) > Math.PI * 7.0 / 8.0 && Game1.random.NextDouble() < 0.5)
+            //    {
+            //        ___turningRight.Value = true;
+            //    }
+            //    else if ((double)(Math.Abs(___targetRotation) - Math.Abs(__instance.rotation)) < Math.PI / 8.0)
+            //    {
+            //        ___turningRight.Value = false;
+            //    }
+            //    if (___turningRight.Value)
+            //    {
+            //        __instance.rotation -= (float)Math.Sign(___targetRotation - __instance.rotation) * ((float)Math.PI / 64f);
+            //    }
+            //    else
+            //    {
+            //        __instance.rotation += (float)Math.Sign(___targetRotation - __instance.rotation) * ((float)Math.PI / 64f);
+            //    }
+            //    __instance.rotation %= (float)Math.PI * 2f;
+            //    ___wasHitCounter.Value = 5 + Game1.random.Next(-1, 2);
+            //}
+            float maxAccel = Math.Min(7f, Math.Max(2f, 7f - t / 64f / 2f));
+            xSlope = (float)Math.Cos((double)__instance.rotation + Math.PI / 2.0);
+            ySlope = 0f - (float)Math.Sin((double)__instance.rotation + Math.PI / 2.0);
+            __instance.xVelocity += (0f - xSlope) * maxAccel / 6f + (float)Game1.random.Next(-10, 10) / 100f;
+            __instance.yVelocity += (0f - ySlope) * maxAccel / 6f + (float)Game1.random.Next(-10, 10) / 100f;
+            if (Math.Abs(__instance.xVelocity) > Math.Abs((0f - xSlope) * 7f))
+            {
+                __instance.xVelocity -= (0f - xSlope) * maxAccel / 6f;
+            }
+            if (Math.Abs(__instance.yVelocity) > Math.Abs((0f - ySlope) * 7f))
+            {
+                __instance.yVelocity -= (0f - ySlope) * maxAccel / 6f;
+            }
+        }
+
         // Generate explosion animation when placed
         private static bool DoPearlExplosionAnimation(GameLocation location, int x, int y, Farmer who)
         {
@@ -181,5 +384,25 @@ namespace DragonPearlLure
             location.netAudio.StartPlaying("fuse");
             return true;
         }
+
+        //private static Bat findClosestPearlMonster(Bat[] monsterList, int xLoc, int yLoc)
+        //{
+        //    if (monsterList.Length == 0)
+        //    {
+        //        return null;
+        //    }
+
+        //    List<Tuple<Bat, double>> batDists = new List<Tuple<Bat, double>>();
+        //    foreach (Bat pearlMonst in monsterList)
+        //    {
+        //        double distance = Math.Sqrt((pearlMonst.GetBoundingBox().Center.X - xLoc) ^ 2 + (pearlMonst.GetBoundingBox().Center.Y - yLoc) ^ 2);
+        //        batDists.Add(new Tuple<Bat,double> (pearlMonst, distance));
+        //    }
+
+        //    batDists.Sort((x, y) => y.Item1.CompareTo(x.Item1));
+
+        //    return batDists[0].Item1;
+
+        //}
     }
 }
