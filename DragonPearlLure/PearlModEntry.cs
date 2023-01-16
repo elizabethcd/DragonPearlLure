@@ -2,10 +2,12 @@
 using System.IO;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewModdingAPI.Utilities;
 using StardewValley;
+using StardewValley.Monsters;
 
 namespace DragonPearlLure
 {
@@ -13,14 +15,22 @@ namespace DragonPearlLure
     internal sealed class ModEntry : Mod
     {
         /// <summary>The Json Assets mod API.</summary>
-        private IJsonAssets JA_API;
+        private static IJsonAssets JA_API;
 
+        /// <summary>Monitor for logging purposes.</summary>
         private static IMonitor Mon;
 
+        /// <summary>Game1.multiplayer from reflection.</summary>
         private static Multiplayer multiplayer;
 
+        /// <summary>The name of the pearl lure.</summary>
+        private static string pearlLureName = "violetlizabet.PearlLure";
+
+        /// <summary>The name of the pearl lure.</summary>
+        private static string pearlLureMonsterName = "Pearl Lure Monster";
+
         /// <summary>The item ID for the pearl lure.</summary>
-        public int PearlLureID => this.JA_API.GetObjectId("violetlizabet.PearlLure");
+        public static int PearlLureID => JA_API.GetObjectId(pearlLureName);
 
         /*********
         ** Public methods
@@ -30,6 +40,7 @@ namespace DragonPearlLure
         public override void Entry(IModHelper helper)
         {
             helper.Events.GameLoop.GameLaunched += this.OnGameLaunched;
+            helper.Events.Content.AssetRequested += this.OnAssetRequested;
 
             // Set up some things
             var harmony = new Harmony(this.ModManifest.UniqueID);
@@ -55,9 +66,12 @@ namespace DragonPearlLure
                postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.IsPlaceable_Postfix))
             );
 
-            // Allow passable
+            // Spawn flying pearl when exploded
+            harmony.Patch(
+               original: AccessTools.Method(typeof(TemporaryAnimatedSprite), nameof(TemporaryAnimatedSprite.unload)),
+               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.TASUnload_Postfix))
+            );
         }
-
 
         // Grab JA API in order to create pearl lure
         private void OnGameLaunched(object sender, GameLaunchedEventArgs e)
@@ -69,7 +83,16 @@ namespace DragonPearlLure
             }
             else
             {
-                this.JA_API.LoadAssets(Path.Combine(this.Helper.DirectoryPath, "assets", "json-assets"), this.Helper.Translation);
+                JA_API.LoadAssets(Path.Combine(this.Helper.DirectoryPath, "assets", "json-assets"), this.Helper.Translation);
+            }
+        }
+
+        // Load pearl lure monster asset
+        private void OnAssetRequested(object sender, AssetRequestedEventArgs e)
+        {
+            if (e.NameWithoutLocale.IsEquivalentTo("Characters/Monsters/" + pearlLureMonsterName))
+            {
+                e.LoadFromModFile<Texture2D>("assets/PearlLureMonster.png", AssetLoadPriority.Medium);
             }
         }
 
@@ -77,7 +100,7 @@ namespace DragonPearlLure
         private static void CanBePlacedHere_Postfix(StardewValley.Object __instance, GameLocation l, Vector2 tile, ref bool __result)
         {
             // Not our item, we don't care
-            if (!__instance.Name.Contains("violetlizabet.PearlLure",StringComparison.OrdinalIgnoreCase) || __instance.bigCraftable.Value)
+            if (!__instance.Name.Contains(pearlLureName, StringComparison.OrdinalIgnoreCase) || __instance.bigCraftable.Value)
             {
                 return;
             }
@@ -95,13 +118,13 @@ namespace DragonPearlLure
         private static bool PlacementAction_Prefix(StardewValley.Object __instance, GameLocation location, int x, int y, Farmer who, ref bool __result)
         {
             // Not our item, we don't care
-            if (!__instance.Name.Contains("violetlizabet.PearlLure", StringComparison.OrdinalIgnoreCase) || __instance.bigCraftable.Value)
+            if (!__instance.Name.Contains(pearlLureName, StringComparison.OrdinalIgnoreCase) || __instance.bigCraftable.Value)
             {
                 return true;
             }
             else 
             {
-                bool success = DoPearlExplosionAnimation(location, x, y, who, __instance.ParentSheetIndex);
+                bool success = DoPearlExplosionAnimation(location, x, y, who);
                 if (success)
                 {
                     __result = true;
@@ -110,17 +133,30 @@ namespace DragonPearlLure
             }
         }
 
-        // 
+        // Set placeable to true for our item
         private static void IsPlaceable_Postfix(StardewValley.Object __instance, ref bool __result)
         {
-            if (__instance.Name.Contains("violetlizabet.PearlLure", StringComparison.OrdinalIgnoreCase))
+            if (__instance.Name.Contains(pearlLureName, StringComparison.OrdinalIgnoreCase))
             {
                 __result = true;
             }
         }
 
+        // Spawn a new pearl lure monster when unloaded
+        private static void TASUnload_Postfix(TemporaryAnimatedSprite __instance)
+        {
+            if (__instance.initialParentTileIndex == PearlLureID)
+            {
+                Bat newBat = new Bat(__instance.Position, -555);
+                newBat.DamageToFarmer = 0;
+                newBat.Name = pearlLureMonsterName;
+                newBat.reloadSprite();
+                __instance.Parent.addCharacter(newBat);
+            }
+        }
+
         // Generate explosion animation when placed
-        private static bool DoPearlExplosionAnimation(GameLocation location, int x, int y, Farmer who, int itemID)
+        private static bool DoPearlExplosionAnimation(GameLocation location, int x, int y, Farmer who)
         {
             Vector2 placementTile = new Vector2(x / 64, y / 64);
             foreach (TemporaryAnimatedSprite temporarySprite2 in location.temporarySprites)
@@ -132,7 +168,7 @@ namespace DragonPearlLure
             }
             int idNum = Game1.random.Next();
             location.playSound("thudStep");
-            TemporaryAnimatedSprite pearlTAS = new TemporaryAnimatedSprite(itemID, 100f, 1, 24, placementTile * 64f, flicker: true, flipped: false, location, who)
+            TemporaryAnimatedSprite pearlTAS = new TemporaryAnimatedSprite(PearlLureID, 100f, 1, 24, placementTile * 64f, flicker: true, flipped: false, location, who)
             {
                 bombRadius = 3,
                 bombDamage = 1,
