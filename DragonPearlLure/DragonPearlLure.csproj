@@ -2,14 +2,9 @@
 
   <PropertyGroup>
     <TargetFramework>net5.0</TargetFramework>
+    <EnableHarmony>true</EnableHarmony>
   </PropertyGroup>
 
-  <ItemGroup>
-    <None Remove="Pathoschild.Stardew.ModBuildConfig" />
-    <None Remove="i18n\" />
-    <None Remove="assets\" />
-    <None Remove="assets\json-assets\" />
-  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.1.0" />
   </ItemGroup>

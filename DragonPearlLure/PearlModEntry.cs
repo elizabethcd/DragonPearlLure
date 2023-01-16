@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using HarmonyLib;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
@@ -14,6 +15,10 @@ namespace DragonPearlLure
         /// <summary>The Json Assets mod API.</summary>
         private IJsonAssets JA_API;
 
+        private static IMonitor Mon;
+
+        private static Multiplayer multiplayer;
+
         /// <summary>The item ID for the pearl lure.</summary>
         public int PearlLureID => this.JA_API.GetObjectId("violetlizabet.PearlLure");
 
@@ -25,13 +30,38 @@ namespace DragonPearlLure
         public override void Entry(IModHelper helper)
         {
             helper.Events.GameLoop.GameLaunched += this.OnGameLaunched;
-            helper.Events.GameLoop.SaveLoaded += this.OnSaveLoaded;
+
+            // Set up some things
+            var harmony = new Harmony(this.ModManifest.UniqueID);
+            var Game1_multiplayer = this.Helper.Reflection.GetField<Multiplayer>(typeof(Game1), "multiplayer").GetValue();
+            Mon = Monitor;
+            multiplayer = Game1_multiplayer;
+
+            // Allow pearl lures to be placed
+            harmony.Patch(
+               original: AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.canBePlacedHere)),
+               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.CanBePlacedHere_Postfix))
+            );
+
+            // Cause explosion when placed
+            harmony.Patch(
+               original: AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.placementAction)),
+               prefix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.PlacementAction_Prefix))
+            );
+
+            // Allow placeable
+            harmony.Patch(
+               original: AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.isPlaceable)),
+               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.IsPlaceable_Postfix))
+            );
+
+            // Allow passable
         }
 
-        //
+
+        // Grab JA API in order to create pearl lure
         private void OnGameLaunched(object sender, GameLaunchedEventArgs e)
         {
-            // Grab JA API in order to create ring
             JA_API = this.Helper.ModRegistry.GetApi<IJsonAssets>("spacechase0.JsonAssets");
             if (JA_API == null)
             {
@@ -43,17 +73,56 @@ namespace DragonPearlLure
             }
         }
 
-        // Get the Json Assets ID
-        private void OnSaveLoaded(object sender, SaveLoadedEventArgs e)
+        // Allow our object to be placed
+        private static void CanBePlacedHere_Postfix(StardewValley.Object __instance, GameLocation l, Vector2 tile, ref bool __result)
         {
-            throw new NotImplementedException();
+            // Not our item, we don't care
+            if (!__instance.Name.Contains("violetlizabet.PearlLure",StringComparison.OrdinalIgnoreCase) || __instance.bigCraftable.Value)
+            {
+                return;
+            }
+            else
+            {
+                // If the tile is suitable, it can be placed
+                if ((!l.isTileOccupiedForPlacement(tile, __instance) || l.isTileOccupiedByFarmer(tile) != null))
+                {
+                    __result = true;
+                }
+            }
+        }
+
+        // Trigger explosion properly when placed
+        private static bool PlacementAction_Prefix(StardewValley.Object __instance, GameLocation location, int x, int y, Farmer who, ref bool __result)
+        {
+            // Not our item, we don't care
+            if (!__instance.Name.Contains("violetlizabet.PearlLure", StringComparison.OrdinalIgnoreCase) || __instance.bigCraftable.Value)
+            {
+                return true;
+            }
+            else 
+            {
+                bool success = DoPearlExplosionAnimation(location, x, y, who, __instance.ParentSheetIndex);
+                if (success)
+                {
+                    __result = true;
+                }
+                return false;
+            }
+        }
+
+        // 
+        private static void IsPlaceable_Postfix(StardewValley.Object __instance, ref bool __result)
+        {
+            if (__instance.Name.Contains("violetlizabet.PearlLure", StringComparison.OrdinalIgnoreCase))
+            {
+                __result = true;
+            }
         }
 
         // Generate explosion animation when placed
-        private bool DoPearlExplosionAnimation(GameLocation location, int x, int y, Farmer who)
+        private static bool DoPearlExplosionAnimation(GameLocation location, int x, int y, Farmer who, int itemID)
         {
             Vector2 placementTile = new Vector2(x / 64, y / 64);
-            var Game1_multiplayer = this.Helper.Reflection.GetField<Multiplayer>(typeof(Game1), "multiplayer").GetValue();
             foreach (TemporaryAnimatedSprite temporarySprite2 in location.temporarySprites)
             {
                 if (temporarySprite2.position.Equals(placementTile * 64f))
@@ -63,27 +132,16 @@ namespace DragonPearlLure
             }
             int idNum = Game1.random.Next();
             location.playSound("thudStep");
-            Game1_multiplayer.broadcastSprites(location, new TemporaryAnimatedSprite(PearlLureID, 100f, 1, 24, placementTile * 64f, flicker: true, flipped: false, location, who)
+            TemporaryAnimatedSprite pearlTAS = new TemporaryAnimatedSprite(itemID, 100f, 1, 24, placementTile * 64f, flicker: true, flipped: false, location, who)
             {
+                bombRadius = 3,
+                bombDamage = 1,
                 shakeIntensity = 0.5f,
                 shakeIntensityChange = 0.002f,
                 extraInfoForEndBehavior = idNum,
                 endFunction = location.removeTemporarySpritesWithID
-            });
-            Game1_multiplayer.broadcastSprites(location, new TemporaryAnimatedSprite("LooseSprites\\Cursors", new Microsoft.Xna.Framework.Rectangle(598, 1279, 3, 4), 53f, 5, 9, placementTile * 64f, flicker: true, flipped: false, (float)(y + 7) / 10000f, 0f, Color.Yellow, 4f, 0f, 0f, 0f)
-            {
-                id = idNum
-            });
-            Game1_multiplayer.broadcastSprites(location, new TemporaryAnimatedSprite("LooseSprites\\Cursors", new Microsoft.Xna.Framework.Rectangle(598, 1279, 3, 4), 53f, 5, 9, placementTile * 64f, flicker: true, flipped: false, (float)(y + 7) / 10000f, 0f, Color.Orange, 4f, 0f, 0f, 0f)
-            {
-                delayBeforeAnimationStart = 100,
-                id = idNum
-            });
-            Game1_multiplayer.broadcastSprites(location, new TemporaryAnimatedSprite("LooseSprites\\Cursors", new Microsoft.Xna.Framework.Rectangle(598, 1279, 3, 4), 53f, 5, 9, placementTile * 64f, flicker: true, flipped: false, (float)(y + 7) / 10000f, 0f, Color.White, 3f, 0f, 0f, 0f)
-            {
-                delayBeforeAnimationStart = 200,
-                id = idNum
-            });
+            };
+            multiplayer.broadcastSprites(location, pearlTAS);
             location.netAudio.StartPlaying("fuse");
             return true;
         }
