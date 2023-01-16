@@ -81,19 +81,21 @@ namespace DragonPearlLure
             // Make flying pearl not chase the farmer
             harmony.Patch(
                original: AccessTools.Method(typeof(Bat), nameof(Bat.behaviorAtGameTick)),
+               prefix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Bat_BehaviorAtGameTick_Prefix))
+            );
+            harmony.Patch(
+               original: AccessTools.Method(typeof(Bat), nameof(Bat.behaviorAtGameTick)),
                postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Bat_BehaviorAtGameTick_Postfix))
             );
 
             // Make serpent chase the flying pearl
             harmony.Patch(
                original: AccessTools.Method(typeof(Serpent), "updateAnimation"),
-               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Serpent_UpdateAnimation_Postfix))
+               prefix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Serpent_UpdateAnimation_Prefix))
             );
-
-            // Make serpent chase the flying pearl part 2 electric boogaloo
             harmony.Patch(
-               original: AccessTools.Method(typeof(Serpent), nameof(Serpent.behaviorAtGameTick)),
-               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Serpent_behaviorAtGameTick_Postfix))
+               original: AccessTools.Method(typeof(Serpent), "updateAnimation"),
+               postfix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.Serpent_UpdateAnimation_Postfix))
             );
         }
 
@@ -179,8 +181,17 @@ namespace DragonPearlLure
             }
         }
 
+        // Save some important things for the postfix
+        private static void Bat_BehaviorAtGameTick_Prefix(Bat __instance, out float[] __state)
+        {
+            __state = new float[3];
+            __state[0] = __instance.xVelocity;
+            __state[1] = __instance.yVelocity;
+            __state[2] = __instance.rotation;
+        }
+
         // Make the pearl lure monster not chase the farmer
-        private static void Bat_BehaviorAtGameTick_Postfix(Bat __instance, float ___maxSpeed, float ___extraVelocity, ref NetInt ___wasHitCounter, ref NetBool ___turningRight, ref float ___targetRotation)
+        private static void Bat_BehaviorAtGameTick_Postfix(Bat __instance, float[] __state, float ___maxSpeed, float ___extraVelocity, ref NetInt ___wasHitCounter, ref NetBool ___turningRight, ref float ___targetRotation)
         {
             // Not my monster, leave immediately
             if (!__instance.Name.Equals(pearlLureMonsterName,StringComparison.OrdinalIgnoreCase))
@@ -218,6 +229,19 @@ namespace DragonPearlLure
                 __instance.modData[modID + "Y"] = newTargetY.ToString();
                 targetX = newTargetX;
                 targetY = newTargetY;
+            }
+
+            // Reset the bat stats before running the movement calcs
+            try
+            {
+                __instance.xVelocity = __state[0];
+                __instance.yVelocity = __state[1];
+                __instance.rotation = __state[2];
+            }
+            catch (Exception ex)
+            {
+                Mon.Log($"Unable to get lure monster state from prefix due to {ex}",LogLevel.Error);
+                return;
             }
 
             // Get the x and y slope towards the target and normalize
@@ -269,8 +293,17 @@ namespace DragonPearlLure
             }
         }
 
+        // Save some important things for the postfix
+        private static void Serpent_UpdateAnimation_Prefix(Serpent __instance, out float[] __state)
+        {
+            __state = new float[3];
+            __state[0] = __instance.xVelocity;
+            __state[1] = __instance.yVelocity;
+            __state[2] = __instance.rotation;
+        }
+
         // Make the serpents chase the pearl lure monster
-        private static void Serpent_UpdateAnimation_Postfix(Serpent __instance, ref int ___wasHitCounter, ref bool ___turningRight, ref float ___targetRotation)
+        private static void Serpent_UpdateAnimation_Postfix(Serpent __instance, float[] __state, ref int ___wasHitCounter, ref bool ___turningRight, ref float ___targetRotation)
         {
             // Not my monster, leave immediately
             if (!__instance.Name.Contains("Serpent", StringComparison.OrdinalIgnoreCase))
@@ -281,12 +314,10 @@ namespace DragonPearlLure
             // If the serpent is in a weird place, quit and leave
             if (double.IsNaN(__instance.xVelocity) || double.IsNaN(__instance.yVelocity))
             {
-                Mon.Log("Bad serpent return", LogLevel.Warn);
                 return;
             }
             if (__instance.Position.X <= -640f || __instance.Position.Y <= -640f || __instance.Position.X >= (float)(__instance.currentLocation.Map.Layers[0].LayerWidth * 64 + 640) || __instance.Position.Y >= (float)(__instance.currentLocation.Map.Layers[0].LayerHeight * 64 + 640))
             {
-                Mon.Log("Bad serpent return", LogLevel.Warn);
                 return;
             }
 
@@ -294,11 +325,24 @@ namespace DragonPearlLure
             Bat closestLure = getLure(__instance.currentLocation);
             if (closestLure == null)
             {
-                Mon.Log("No lure found", LogLevel.Warn);
                 return;
             }
 
-            Mon.Log("Redirecting serpent to lure",LogLevel.Warn);
+            // Reset the serpent stats before running the movement calcs
+            try
+            {
+                __instance.xVelocity = __state[0];
+                __instance.yVelocity = __state[1];
+                __instance.rotation = __state[2];
+            }
+            catch (Exception ex)
+            {
+                Mon.Log($"Unable to get serpent state from prefix due to {ex}", LogLevel.Error);
+                return;
+            }
+
+            Mon.Log("Redirecting serpent to lure in animation",LogLevel.Warn);
+            Mon.Log($"Current x-velocity is {__instance.xVelocity} and y-velocity is {__instance.yVelocity} and rotation is {__instance.rotation}", LogLevel.Warn);
 
             // Get the x and y slope towards the target and normalize
             float xSlope = -(closestLure.GetBoundingBox().Center.X - __instance.GetBoundingBox().Center.X);
@@ -346,39 +390,9 @@ namespace DragonPearlLure
             {
                 __instance.yVelocity -= (0f - ySlope) * maxAccel / 6f;
             }
-        }
 
-        private static void Serpent_behaviorAtGameTick_Postfix(Serpent __instance)
-        {
-
-            // Get the closest pearl lure monster, if there isn't one then quit
-            Bat closestLure = getLure(__instance.currentLocation);
-            if (closestLure == null)
-            {
-                Mon.Log("No lure found", LogLevel.Warn);
-                return;
-            }
-
-            if (Math.Abs(closestLure.GetBoundingBox().Center.Y - __instance.GetBoundingBox().Center.Y) > 192)
-            {
-                if (closestLure.GetBoundingBox().Center.X - __instance.GetBoundingBox().Center.X > 0)
-                {
-                    __instance.SetMovingLeft(b: true);
-                }
-                else
-                {
-                    __instance.SetMovingRight(b: true);
-                }
-            }
-            else if (closestLure.GetBoundingBox().Center.Y - __instance.GetBoundingBox().Center.Y > 0)
-            {
-                __instance.SetMovingUp(b: true);
-            }
-            else
-            {
-                __instance.SetMovingDown(b: true);
-            }
-
+            Mon.Log("Finished redirecting in animation", LogLevel.Warn);
+            Mon.Log($"Current x-velocity is {__instance.xVelocity} and y-velocity is {__instance.yVelocity}", LogLevel.Warn);
         }
 
         // Generate explosion animation when placed
