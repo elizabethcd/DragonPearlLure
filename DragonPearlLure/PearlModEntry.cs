@@ -21,6 +21,9 @@ namespace DragonPearlLure
         /// <summary>Monitor for logging purposes.</summary>
         private static IMonitor Mon;
 
+        /// <summary>Helper for patching purposes.</summary>
+        private static IModHelper Help;
+
         /// <summary>Game1.multiplayer from reflection.</summary>
         private static Multiplayer multiplayer;
 
@@ -32,6 +35,9 @@ namespace DragonPearlLure
 
         /// <summary>The item ID for the pearl lure.</summary>
         public static string PearlLureID = "violetlizabet.PearlLure";
+
+        /// <summary>The item ID for the pearl lure.</summary>
+        public static string lureImageLoc = "Mods/violetlizabet.DragonPearlLure/PearlLure";
 
         /// <summary>The magic number for the TAS</summary>
         private static int PearlLureMagicNumber = 15109;
@@ -53,6 +59,7 @@ namespace DragonPearlLure
             var harmony = new Harmony(this.ModManifest.UniqueID);
             var Game1_multiplayer = this.Helper.Reflection.GetField<Multiplayer>(typeof(Game1), "multiplayer").GetValue();
             Mon = Monitor;
+            Help = Helper;
             multiplayer = Game1_multiplayer;
             modID = this.ModManifest.UniqueID;
 
@@ -127,14 +134,14 @@ namespace DragonPearlLure
             {
                 e.Edit(asset => {
                     var dict = asset.AsDictionary<string, string>();
-                    dict.Data["violetlizabet.PearlLure_Name"] =
+                    dict.Data[$"{PearlLureID}_Name"] =
                             Helper.Translation.Get("pearl-lure.name");
-                    dict.Data["violetlizabet.PearlLure_Description"] =
+                    dict.Data[$"{PearlLureID}_Description"] =
                             Helper.Translation.Get("pearl-lure.description");
                 });
             }
             // Add in the image for the pearl lure
-            else if (e.NameWithoutLocale.IsEquivalentTo("Mods/violetlizabet.DragonPearlLure/PearlLure"))
+            else if (e.NameWithoutLocale.IsEquivalentTo(lureImageLoc))
             {
                 e.LoadFrom(() => {
                     return Helper.ModContent.Load<Texture2D>("assets/object.png");
@@ -145,7 +152,7 @@ namespace DragonPearlLure
             {
                 e.Edit(asset => {
                     var dict = asset.AsDictionary<string, string>();
-                    dict.Data[PearlLureID] = $"287 1 768 2/Field/{PearlLureID}/false/null/[LocalizedText Strings\\Objects:violetlizabet.PearlLure_Name]";
+                    dict.Data[PearlLureID] = $"287 1 768 2/Field/{PearlLureID}/false/null/[LocalizedText Strings\\Objects:{PearlLureID}_Name]";
                 });
             }
             // Sell the pearl lure at the Dwarf
@@ -382,8 +389,15 @@ namespace DragonPearlLure
                 shakeIntensity = 0.5f,
                 shakeIntensityChange = 0.002f,
                 extraInfoForEndBehavior = idNum,
-                endFunction = location.removeTemporarySpritesWithID
+                endFunction = location.removeTemporarySpritesWithID,
+                sourceRect = new Rectangle(0, 0, 16, 16),
+                scale = 4f
             };
+
+            // Try forcing the texture name
+            Help.Reflection.GetField<string>(pearlTAS, "textureName").SetValue(lureImageLoc);
+            Help.Reflection.GetMethod(pearlTAS, "loadTexture").Invoke();
+
             multiplayer.broadcastSprites(location, pearlTAS);
             location.netAudio.StartPlaying("fuse");
             return true;
